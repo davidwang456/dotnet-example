@@ -1,0 +1,99 @@
+stages:
+  - build
+  - test
+  - package
+  - publish
+
+variables:
+  SOLUTION_FILE: "MyWebApi.sln"
+  PROJECT_NAME: "MyWebApi"
+  NEXUS_URL: "http://your-nexus-server.com"
+  NEXUS_REPOSITORY: "nuget-hosted"
+  NEXUS_USERNAME: $NEXUS_USERNAME
+  NEXUS_PASSWORD: $NEXUS_PASSWORD
+  DOTNET_VERSION: "4.8.1"
+
+# 缓存NuGet包以加速构建
+cache:
+  paths:
+    - .nuget/packages/
+    - **/bin/
+    - **/obj/
+
+# 编译阶段
+build:
+  stage: build
+  tags:
+    - windows
+  script:
+    - msbuild -version
+    - nuget restore $SOLUTION_FILE -ConfigFile nuget.config
+    - msbuild $SOLUTION_FILE /p:Configuration=Release /p:Platform="Any CPU" /t:Clean,Build
+  artifacts:
+    paths:
+      - "**/bin/Release/"
+      - "**/obj/Release/"
+    expire_in: 1 hour
+
+# 测试阶段
+test:
+  stage: test
+  tags:
+    - windows
+  script:
+    - nuget install MSTest.TestAdapter -Version 2.2.10 -OutputDirectory packages
+    - nuget install MSTest.TestFramework -Version 2.2.10 -OutputDirectory packages
+    - msbuild $SOLUTION_FILE /p:Configuration=Release /p:Platform="Any CPU" /t:Test
+  artifacts:
+    paths:
+      - ./TestResults/
+    expire_in: 1 week
+  dependencies:
+    - build
+
+# 打包阶段
+package:
+  stage: package
+  tags:
+    - windows
+  script:
+    - nuget pack $PROJECT_NAME/$PROJECT_NAME.csproj -Properties Configuration=Release -OutputDirectory ./packages
+  artifacts:
+    paths:
+      - ./packages/
+    expire_in: 1 week
+  dependencies:
+    - build
+  only:
+    - tags
+    - main
+
+# 发布到Nexus阶段
+publish:
+  stage: publish
+  tags:
+    - windows
+  script:
+    - |
+      for package in ./packages/*.nupkg; do
+        nuget push "$package" -Source "$NEXUS_URL/repository/$NEXUS_REPOSITORY/" -ApiKey "$NEXUS_USERNAME:$NEXUS_PASSWORD"
+      done
+  dependencies:
+    - package
+  only:
+    - tags
+  when: manual
+  environment:
+    name: production
+    url: $NEXUS_URL
+
+# 代码质量检查
+code_quality:
+  stage: test
+  tags:
+    - windows
+  script:
+    - msbuild $SOLUTION_FILE /p:Configuration=Release /p:Platform="Any CPU" /t:Clean,Build
+  dependencies:
+    - build
+  allow_failure: true 

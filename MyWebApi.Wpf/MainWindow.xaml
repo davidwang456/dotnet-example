@@ -1,0 +1,24 @@
+<Window x:Class="MyWebApi.Wpf.MainWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="Weather Forecast" Height="350" Width="525">
+    <Grid Margin="10">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="*"/>
+        </Grid.RowDefinitions>
+
+        <Button Content="Load Forecasts" Width="140" Height="30" Click="OnLoadClicked"/>
+        <ListView Grid.Row="1" Margin="0,10,0,0" ItemsSource="{Binding Forecasts}">
+            <ListView.View>
+                <GridView>
+                    <GridViewColumn Header="Date" DisplayMemberBinding="{Binding Date}" Width="120"/>
+                    <GridViewColumn Header="Temp (C)" DisplayMemberBinding="{Binding TemperatureC}" Width="80"/>
+                    <GridViewColumn Header="Temp (F)" DisplayMemberBinding="{Binding TemperatureF}" Width="80"/>
+                    <GridViewColumn Header="Summary" DisplayMemberBinding="{Binding Summary}" Width="200"/>
+                </GridView>
+            </ListView.View>
+        </ListView>
+    </Grid>
+</Window>
+

@@ -1,0 +1,178 @@
+stages:
+  - build
+  - test
+  - package
+  - package-wpf
+  - publish
+
+variables:
+  SOLUTION_FILE: "MyWebApi.sln"
+  PROJECT_NAME: "MyWebApi"
+  NEXUS_URL: "http://your-nexus-server.com"
+  NEXUS_REPOSITORY: "nuget-hosted"
+  NEXUS_USERNAME: $NEXUS_USERNAME
+  NEXUS_PASSWORD: $NEXUS_PASSWORD
+  # NuGet 本地包目录（.NET Framework 经典项目默认使用 packages 目录）
+  NUGET_PACKAGES: "packages"
+
+# 缓存（跨 Windows 作业生效）
+cache:
+  paths:
+    - packages/
+    - **/bin/
+    - **/obj/
+
+# 编译（Windows 容器，MSBuild）
+build:
+  stage: build
+  image: mcr.microsoft.com/dotnet/framework/sdk:4.8.1
+  tags:
+    - windows
+  script:
+    - |
+      $ErrorActionPreference = 'Stop'
+      New-Item -ItemType Directory -Force -Path "$env:NUGET_PACKAGES" | Out-Null
+      # 还原
+      nuget restore $env:SOLUTION_FILE -NonInteractive -ConfigFile .\nuget.config -PackagesDirectory $env:NUGET_PACKAGES
+      if ($LASTEXITCODE -ne 0) { throw "nuget restore failed with code $LASTEXITCODE" }
+      # 编译
+      msbuild $env:SOLUTION_FILE /p:Configuration=Release /m
+      if ($LASTEXITCODE -ne 0) { throw "msbuild failed with code $LASTEXITCODE" }
+  artifacts:
+    paths:
+      - "**/bin/Release/"
+      - "**/obj/Release/"
+    expire_in: 1 hour
+
+# 测试（vstest + OpenCover + ReportGenerator）
+test:
+  stage: test
+  image: mcr.microsoft.com/dotnet/framework/sdk:4.8.1
+  tags:
+    - windows
+  script:
+    - |
+      $ErrorActionPreference = 'Stop'
+      $openCover = '.\tools\OpenCover\tools\OpenCover.Console.exe'
+      if (-not (Test-Path $openCover)) { throw "OpenCover not found at $openCover" }
+      $reportGen = (Get-ChildItem '.\tools\ReportGenerator\tools\**\ReportGenerator.exe' -Recurse -ErrorAction Stop | Select-Object -First 1 -ExpandProperty FullName)
+      if (-not $reportGen) { throw 'ReportGenerator.exe not found under tools/ReportGenerator/tools' }
+      $nunitConsole = '.\tools\NUnit.ConsoleRunner\tools\nunit3-console.exe'
+      if (-not (Test-Path $nunitConsole)) { throw "nunit3-console.exe not found at $nunitConsole" }
+
+      # 查找测试程序集
+      $testDlls = Get-ChildItem -Recurse -Filter *.Tests.dll | Where-Object { $_.FullName -notmatch 'TestAdapter|TestFramework' } | Select-Object -ExpandProperty FullName
+      if (-not $testDlls -or $testDlls.Count -eq 0) { throw 'No test assemblies found under bin/Release' }
+
+      New-Item -ItemType Directory -Force -Path .\coverage | Out-Null
+      $dllArgs = ($testDlls | ForEach-Object { '"{0}"' -f $_ }) -join ' '
+      & $openCover -register:user -target:"$nunitConsole" -targetargs:$dllArgs -output:"coverage\\opencover.xml" -returntargetcode -filter:"+[*]* -[*]*.Tests.*"
+      if ($LASTEXITCODE -ne 0) { throw "Tests failed via OpenCover (exit $LASTEXITCODE)" }
+
+      & $reportGen -reports:"coverage\\opencover.xml" -targetdir:"coverage\\report" -reporttypes:"Html;Cobertura"
+      if ($LASTEXITCODE -ne 0) { throw "ReportGenerator failed (exit $LASTEXITCODE)" }
+  artifacts:
+    reports:
+      coverage_report:
+        coverage_format: cobertura
+        path: coverage/report/Cobertura.xml
+    paths:
+      - ./coverage/
+    expire_in: 1 week
+  dependencies:
+    - build
+
+# 打包（MSBuild Pack）
+package:
+  stage: package
+  image: mcr.microsoft.com/dotnet/framework/sdk:4.8.1
+  tags:
+    - windows
+  script:
+    - |
+      $ErrorActionPreference = 'Stop'
+      New-Item -ItemType Directory -Force -Path .\packages | Out-Null
+      # 打包 Service 项为 NuGet 包
+      nuget pack .\MyWebApi.Service\MyWebApi.Service.csproj -Properties Configuration=Release -IncludeReferencedProjects -OutputDirectory .\packages -NonInteractive
+      if ($LASTEXITCODE -ne 0) { throw "nuget pack failed with code $LASTEXITCODE" }
+  artifacts:
+    paths:
+      - ./packages/
+    expire_in: 1 week
+  dependencies:
+    - build
+  only:
+    - tags
+    - main
+
+# 打包 WPF 客户端为 Zip
+package_wpf:
+  stage: package-wpf
+  image: mcr.microsoft.com/dotnet/framework/sdk:4.8.1
+  tags:
+    - windows
+  script:
+    - |
+      $ErrorActionPreference = 'Stop'
+      $wpfRelease = Join-Path -Path (Get-Location) -ChildPath 'MyWebApi.Wpf\bin\Release'
+      if (-not (Test-Path $wpfRelease)) { throw "WPF Release output not found at $wpfRelease. Ensure build stage ran." }
+      New-Item -ItemType Directory -Force -Path '.\wpf-dist','.-wpf-packages' | Out-Null
+      Copy-Item -Recurse -Force "$wpfRelease\*" '.\wpf-dist\'
+      New-Item -ItemType Directory -Force -Path '.\wpf-packages' | Out-Null
+      $zipPath = '.\wpf-packages\MyWebApi.Wpf.zip'
+      if (Test-Path $zipPath) { Remove-Item $zipPath -Force }
+      Compress-Archive -Path '.\wpf-dist\*' -DestinationPath $zipPath -Force
+  artifacts:
+    paths:
+      - ./wpf-packages/
+    expire_in: 1 week
+  dependencies:
+    - build
+  only:
+    - tags
+    - main
+
+# 发布到 Nexus（nuget.exe push）
+publish:
+  stage: publish
+  image: mcr.microsoft.com/dotnet/framework/sdk:4.8.1
+  tags:
+    - windows
+  script:
+    - |
+      $ErrorActionPreference = 'Stop'
+      $sourceUrl = "$env:NEXUS_URL/repository/$env:NEXUS_REPOSITORY/"
+      $existing = & nuget sources List | Select-String -SimpleMatch 'Nexus' | Out-String
+      if ($existing) {
+        & nuget sources Update -Name Nexus -Source $sourceUrl -Username $env:NEXUS_USERNAME -Password $env:NEXUS_PASSWORD -StorePasswordInClearText -NonInteractive
+      } else {
+        & nuget sources Add -Name Nexus -Source $sourceUrl -Username $env:NEXUS_USERNAME -Password $env:NEXUS_PASSWORD -StorePasswordInClearText -NonInteractive
+      }
+
+      Get-ChildItem .\packages -Filter *.nupkg | ForEach-Object {
+        & nuget push $_.FullName -Source Nexus -NonInteractive -SkipDuplicate
+        if ($LASTEXITCODE -ne 0) { throw "nuget push failed for $($_.Name) with code $LASTEXITCODE" }
+      }
+  dependencies:
+    - package
+  only:
+    - tags
+  when: manual
+  environment:
+    name: production
+    url: $NEXUS_URL
+
+# 代码质量（基础编译校验，可按需扩展）
+code_quality:
+  stage: test
+  image: mcr.microsoft.com/dotnet/framework/sdk:4.8.1
+  tags:
+    - windows
+  script:
+    - |
+      $ErrorActionPreference = 'Stop'
+      msbuild $env:SOLUTION_FILE /p:Configuration=Release /m /nr:false
+      if ($LASTEXITCODE -ne 0) { throw "msbuild failed with code $LASTEXITCODE" }
+  dependencies:
+    - build
+  allow_failure: true
