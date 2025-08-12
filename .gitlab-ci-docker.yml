@@ -31,9 +31,13 @@ build:
   script:
     - |
       $ErrorActionPreference = 'Stop'
+      # 配置 .NET Framework 跳过 SSL 验证（解决内网证书问题）
+      [System.Net.ServicePointManager]::ServerCertificateValidationCallback = {$true}
+      [System.Net.ServicePointManager]::SecurityProtocol = [System.Net.SecurityProtocolType]::Tls12
+      
       New-Item -ItemType Directory -Force -Path "$env:NUGET_PACKAGES" | Out-Null
-      # 还原
-      nuget restore $env:SOLUTION_FILE -NonInteractive -ConfigFile .\nuget.config -PackagesDirectory $env:NUGET_PACKAGES
+      # 还原（添加 -NoSSL 跳过 SSL 验证）
+      nuget restore $env:SOLUTION_FILE -NonInteractive -ConfigFile .\nuget.config -PackagesDirectory $env:NUGET_PACKAGES -NoSSL
       if ($LASTEXITCODE -ne 0) { throw "nuget restore failed with code $LASTEXITCODE" }
       # 编译
       msbuild $env:SOLUTION_FILE /p:Configuration=Release /m
@@ -141,6 +145,10 @@ publish:
   script:
     - |
       $ErrorActionPreference = 'Stop'
+      # 配置 .NET Framework 跳过 SSL 验证（解决内网证书问题）
+      [System.Net.ServicePointManager]::ServerCertificateValidationCallback = {$true}
+      [System.Net.ServicePointManager]::SecurityProtocol = [System.Net.SecurityProtocolType]::Tls12
+      
       $sourceUrl = "$env:NEXUS_URL/repository/$env:NEXUS_REPOSITORY/"
       $existing = & nuget sources List | Select-String -SimpleMatch 'Nexus' | Out-String
       if ($existing) {
