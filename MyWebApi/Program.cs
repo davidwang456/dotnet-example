@@ -1,18 +1,26 @@
-using System;
-using Microsoft.Owin.Hosting;
+using MyWebApi.Service;
 
-namespace MyWebApi
+var builder = WebApplication.CreateBuilder(args);
+
+// Add services to the container.
+builder.Services.AddControllers();
+builder.Services.AddEndpointsApiExplorer();
+builder.Services.AddSwaggerGen();
+
+// Register services
+builder.Services.AddScoped<IWeatherForecastService, WeatherForecastService>();
+
+var app = builder.Build();
+
+// Configure the HTTP request pipeline.
+if (app.Environment.IsDevelopment())
 {
-    internal static class Program
-    {
-        private static void Main(string[] args)
-        {
-            var baseAddress = "http://*:5000";
-            using (WebApp.Start<Startup>(url: baseAddress))
-            {
-                Console.WriteLine($"MyWebApi running on {baseAddress}. Press Enter to exit.");
-                Console.ReadLine();
-            }
-        }
-    }
+    app.UseSwagger();
+    app.UseSwaggerUI();
 }
+
+app.UseHttpsRedirection();
+app.UseAuthorization();
+app.MapControllers();
+
+app.Run();

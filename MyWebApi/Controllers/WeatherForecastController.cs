@@ -1,25 +1,23 @@
-using System.Collections.Generic;
-using System.Web.Http;
+using Microsoft.AspNetCore.Mvc;
 using MyWebApi.Service;
 using MyWebApi.Core;
 
-namespace MyWebApi.Controllers
+namespace MyWebApi.Controllers;
+
+[ApiController]
+[Route("api/[controller]")]
+public class WeatherForecastController : ControllerBase
 {
-    [RoutePrefix("weatherforecast")]
-    public class WeatherForecastController : ApiController
+    private readonly IWeatherForecastService _service;
+
+    public WeatherForecastController(IWeatherForecastService service)
     {
-        private readonly IWeatherForecastService _service;
+        _service = service;
+    }
 
-        public WeatherForecastController(IWeatherForecastService service)
-        {
-            _service = service;
-        }
-
-        [HttpGet]
-        [Route("")]
-        public IEnumerable<WeatherForecast> Get()
-        {
-            return _service.GetForecasts();
-        }
+    [HttpGet]
+    public IEnumerable<WeatherForecast> Get()
+    {
+        return _service.GetForecasts();
     }
 }
